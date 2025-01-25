@@ -1,50 +1,53 @@
-use std::net::TcpListener;
-use std::io::Read;
-use crate::http::Request;
+use crate::http::{ParseError, Request, Response, StatusCode};
 use std::convert::TryFrom;
-use std::convert::TryInto;
+use std::io::Read;
+use std::net::TcpListener;
 
+pub trait Handler {
+    fn handle_request(&mut self, request: &Request) -> Response;
 
+    fn handle_bad_request(&mut self, e: &ParseError) -> Response {
+        println!("Failed to parse request: {}", e);
+        Response::new(StatusCode::BadRequest, None)
+    }
+}
 
-pub struct Server{
-        addr: String,
-    } 
-   
-     impl Server { //implementing Server struct
-       pub fn new(addr: String) -> Self {
-            Server {
-                addr
-            }
-        }
-        pub fn run(self){
-         print!("Our server is listening on {:?}", self.addr);
+pub struct Server {
+    addr: String,
+}
 
-         let listener = TcpListener::bind(&self.addr).unwrap(); //binding to the provided address
-        
+impl Server {
+    pub fn new(addr: String) -> Self {
+        Self { addr }
+    }
 
-          loop {
-            match  listener.accept(){
+    pub fn run(self, mut handler: impl Handler) {
+        println!("Listening on {}", self.addr);
+
+        let listener = TcpListener::bind(&self.addr).unwrap();
+
+        loop {
+            match listener.accept() {
                 Ok((mut stream, _)) => {
-                    let mut buffer = [0; 1024]; //reading the data using buffer
-                    match stream.read(&mut buffer){
+                    let mut buffer = [0; 1024];
+                    match stream.read(&mut buffer) {
                         Ok(_) => {
-                            println!("Received message: {}", String::from_utf8_lossy(&buffer));
+                            println!("Received a request: {}", String::from_utf8_lossy(&buffer));
 
-                            match Request::try_from(&buffer[..]){
-                                Ok(request) => {},
-                                Err(e) => println!("Failed to parse request: {}", e),
+                            let response = match Request::try_from(&buffer[..]) {
+                                Ok(request) => handler.handle_request(&request),
+                                Err(e) => handler.handle_bad_request(&e),
+                            };
+
+                            if let Err(e) = response.send(&mut stream) {
+                                println!("Failed to send response: {}", e);
                             }
-                            
-
                         }
-                        Err(_) => println!("Failed to read message"),
+                        Err(e) => println!("Failed to read from connection: {}", e),
                     }
                 }
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                }
- 
+                Err(e) => println!("Failed to establish a connection: {}", e),
             }
-          }
         }
-     }
+    }
+}
